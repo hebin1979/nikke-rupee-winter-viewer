@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title> Nikke 露菲:冬日购物狂 - Spine 动态立绘预览</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #fff;
+    padding: 20px;
+}
+h1 { font-size: 24px; margin-bottom: 10px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+#canvas-wrap {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    background: rgba(255,255,255,0.05);
+}
+canvas { display: block; }
+#debug {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #ff6b6b;
+    max-width: 800px;
+    white-space: pre-wrap;
+    font-family: monospace;
+    background: rgba(0,0,0,0.3);
+    padding: 10px;
+    border-radius: 6px;
+}
+#info {
+    margin-top: 8px;
+    font-size: 14px;
+    color: rgba(255,255,255,0.7);
+}
+#controls, #gif-controls {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    max-width: 900px;
+}
+#controls button, #gif-controls button, #gif-controls select {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+}
+#controls button.active { background: #e94560; }
+#gif-controls button#record-btn { background: #00d9ff; color: #000; font-weight: bold; }
+#gif-controls button#record-btn:disabled { background: #555; color: #888; cursor: not-allowed; }
+#loading {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 16px;
+    color: rgba(255,255,255,0.8);
+}
+</style>
+</head>
+<body>
+<h1> Nikke 露菲:冬日购物狂 (Rupee: Winter Shopper) - 动态立绘</h1>
+<div id="canvas-wrap">
+    <canvas id="canvas" width="700" height="900"></canvas>
+    <div id="loading">加载资源中...</div>
+</div>
+<div id="debug"></div>
+<div id="info"></div>
+<div id="controls"></div>
+<div id="gif-controls">
+    <select id="gif-duration">
+        <option value="30">1秒 (30帧)</option>
+        <option value="60" selected>2秒 (60帧)</option>
+        <option value="90">3秒 (90帧)</option>
+    </select>
+    <select id="gif-fps">
+        <option value="20">20 FPS</option>
+        <option value="30" selected>30 FPS</option>
+    </select>
+    <button id="record-btn"> 录制 GIF</button>
+</div>
+
+<script src="spine-canvas.js"></script>
+<script src="gif.js"></script>
+<script>
+(function() {
+    var canvas = document.getElementById("canvas");
+    var ctx = canvas.getContext("2d");
+    var loading = document.getElementById("loading");
+    var debug = document.getElementById("debug");
+    var info = document.getElementById("info");
+    var controls = document.getElementById("controls");
+    var recordBtn = document.getElementById("record-btn");
+
+    var skeleton, state, renderer, lastTime = 0;
+    var animationNames = [];
+    var currentAnim = "";
+    var scale = 0.35, offsetX = 379, offsetY = 801;
+    var isRecording = false, animId = null;
+
+    function log(msg) {
+        debug.textContent += msg + "\n";
+        console.log(msg);
+    }
+
+    function loadBinary(url, cb) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.responseType = "arraybuffer";
+        xhr.onload = function() {
+            if (xhr.status === 200 || xhr.status === 0) cb(new Uint8Array(xhr.response), null);
+            else cb(null, "HTTP " + xhr.status);
+        };
+        xhr.onerror = function() { cb(null, "网络错误"); };
+        xhr.send();
+    }
+    function loadText(url, cb) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.onload = function() {
+            if (xhr.status === 200 || xhr.status === 0) cb(xhr.responseText, null);
+            else cb(null, "HTTP " + xhr.status);
+        };
+        xhr.onerror = function() { cb(null, "网络错误"); };
+        xhr.send();
+    }
+
+    function init() {
+        log("开始加载资源...");
+        var skelData, atlasText, img, done = 0, hasError = false;
+        function check() {
+            done++;
+            if (done >= 3) {
+                if (hasError) return;
+                if (skelData && atlasText && img) {
+                    log("所有资源加载完成，开始初始化Spine...");
+                    try { setup(skelData, atlasText, img); }
+                    catch(e) { log("初始化错误: " + e.message + "\n" + e.stack); }
+                } else {
+                    log("资源缺失! skel=" + !!skelData + " atlas=" + !!atlasText + " img=" + !!img);
+                }
+            }
+        }
+        loadBinary("c203_00.skel", function(d, e) {
+            if (e) { hasError = true; log("skel加载失败: " + e); return; }
+            skelData = d; log("skel加载成功: " + d.length + " bytes"); check();
+        });
+        loadText("c203_00.atlas", function(t, e) {
+            if (e) { hasError = true; log("atlas加载失败: " + e); return; }
+            atlasText = t; log("atlas加载成功: " + t.length + " chars"); check();
+        });
+        var img = new Image();
+        img.onload = function() {
+            log("图片加载成功: " + img.width + "x" + img.height);
+            check();
+        };
+        img.onerror = function() { hasError = true; log("图片加载失败"); };
+        img.src = "c203_00.png";
+    }
+
+    function setup(skelBytes, atlasStr, image) {
+        loading.style.display = "none";
+
+        log("创建CanvasTexture...");
+        var texture = new spine.CanvasTexture(image);
+        log("CanvasTexture创建成功");
+
+        log("创建TextureAtlas...");
+        var atlas = new spine.TextureAtlas(atlasStr);
+        log("TextureAtlas创建成功, 页面数: " + atlas.pages.length + ", 区域数: " + atlas.regions.length);
+        if (atlas.pages.length > 0) {
+            log("设置页面纹理...");
+            atlas.pages[0].setTexture(texture);
+            log("纹理设置成功");
+        }
+
+        log("创建AtlasAttachmentLoader...");
+        var atlasLoader = new spine.AtlasAttachmentLoader(atlas);
+
+        log("创建SkeletonBinary...");
+        var skeletonBinary = new spine.SkeletonBinary(atlasLoader);
+        log("读取SkeletonData...");
+        var skeletonData = skeletonBinary.readSkeletonData(skelBytes);
+        log("SkeletonData读取成功! 动画数: " + skeletonData.animations.length + " 骨骼数: " + skeletonData.bones.length);
+
+        log("创建AnimationStateData...");
+        var stateData = new spine.AnimationStateData(skeletonData);
+        state = new spine.AnimationState(stateData);
+
+        log("创建Skeleton...");
+        skeleton = new spine.Skeleton(skeletonData);
+        skeleton.setToSetupPose();
+        skeleton.updateWorldTransform();
+        log("Skeleton创建成功");
+
+        // 暴露到全局以便外部脚本访问
+        window.spineSkeleton = skeleton;
+        window.spineState = state;
+        window.spineRenderer = renderer;
+
+        log("创建SkeletonRenderer...");
+        renderer = new spine.SkeletonRenderer(ctx);
+        renderer.triangleRendering = true;
+        log("SkeletonRenderer创建成功, triangleRendering=true");
+
+        animationNames = skeletonData.animations.map(function(a) { return a.name; });
+        info.textContent = "可用动画: " + animationNames.join(", ");
+
+        animationNames.forEach(function(name) {
+            var btn = document.createElement("button");
+            btn.textContent = name;
+            btn.onclick = function() { setAnimation(name); updateActiveButton(btn); };
+            controls.appendChild(btn);
+        });
+
+        if (animationNames.length > 0) {
+            var def = animationNames.find(function(n) { return /idle|wait|stand/i.test(n); }) || animationNames[0];
+            setAnimation(def);
+            var b = controls.querySelector("button");
+            if (b) b.classList.add("active");
+        }
+
+        log("开始渲染循环");
+        recordBtn.onclick = startRecording;
+        animId = requestAnimationFrame(render);
+    }
+
+    function setAnimation(name) {
+        if (!state) return;
+        currentAnim = name;
+        state.setAnimation(0, name, true);
+    }
+    function updateActiveButton(activeBtn) {
+        controls.querySelectorAll("button").forEach(function(b) { b.classList.remove("active"); });
+        activeBtn.classList.add("active");
+    }
+
+    function drawFrame() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (skeleton && renderer) {
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, -scale);
+            try {
+                renderer.draw(skeleton);
+            } catch(e) {
+                log("渲染错误: " + e.message);
+            }
+            ctx.restore();
+        }
+    }
+
+    function render(time) {
+        if (isRecording) return;
+        var dt = (time - lastTime) / 1000;
+        lastTime = time;
+        if (!dt || dt > 0.1) dt = 0.016;
+        if (dt > 0.05) dt = 0.05;
+        if (state) { state.update(dt); state.apply(skeleton); }
+        if (skeleton) { skeleton.updateWorldTransform(); }
+        drawFrame();
+        animId = requestAnimationFrame(render);
+    }
+
+    function startRecording() {
+        if (isRecording || !state) return;
+        isRecording = true;
+        if (animId) cancelAnimationFrame(animId);
+
+        var totalFrames = parseInt(document.getElementById("gif-duration").value);
+        var fps = parseInt(document.getElementById("gif-fps").value);
+        var delay = Math.round(1000 / fps);
+        var dt = delay / 1000;
+
+        recordBtn.disabled = true;
+        recordBtn.textContent = "录制中... 0/" + totalFrames;
+
+        var gif = new GIF({
+            workers: 2,
+            quality: 15,
+            width: canvas.width,
+            height: canvas.height,
+            workerScript: "gif.worker.js",
+            background: "#1a1a2e"
+        });
+
+        var frame = 0;
+        function capture() {
+            if (frame >= totalFrames) {
+                recordBtn.textContent = "编码中...";
+                gif.render();
+                return;
+            }
+            state.update(dt);
+            state.apply(skeleton);
+            skeleton.updateWorldTransform();
+            drawFrame();
+            gif.addFrame(ctx, {copy: true, delay: delay});
+            frame++;
+            recordBtn.textContent = "录制中... " + frame + "/" + totalFrames;
+            setTimeout(capture, 0);
+        }
+
+        gif.on("progress", function(p) {
+            recordBtn.textContent = "GIF编码 " + Math.round(p * 100) + "%";
+        });
+        gif.on("finished", function(blob) {
+            var reader = new FileReader();
+            reader.onloadend = function() {
+                window.lastGifBase64 = reader.result;
+                window.lastGifReady = true;
+            };
+            reader.readAsDataURL(blob);
+
+            isRecording = false;
+            recordBtn.disabled = false;
+            recordBtn.textContent = "录制完成!";
+            lastTime = performance.now();
+            animId = requestAnimationFrame(render);
+        });
+        capture();
+    }
+
+    window.onload = init;
+})();
+</script>
+</body>
+</html>
